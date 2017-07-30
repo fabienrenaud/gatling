@@ -174,7 +174,33 @@ class WsActor(wsName: String, statsEngine: StatsEngine, httpEngine: HttpEngine) 
         }
 
       case OnByteMessage(message, time) =>
-        logger.debug(s"Received byte message on websocket '$wsName':$message. Beware, byte message checks are currently not supported")
+        logger.debug(s"Received byte message on websocket '$wsName':$message. Beware, raw bytes not supported. Instead, they are converted to a string via new String(byte[])")
+
+        val messageAsString = new String(message)
+
+        // copy of OnTextMessage
+        tx.check.foreach { check =>
+
+          implicit val cache = mutable.Map.empty[Any, Any]
+
+          check.check(messageAsString, tx.session) match {
+            case Success(result) =>
+              val results = result :: tx.pendingCheckSuccesses
+
+              check.expectation match {
+                case UntilCount(count) if count == results.length =>
+                  succeedPendingCheck(tx, results, goToOpenState(webSocket))
+
+                case _ =>
+                  // let's pile up
+                  val newTx = tx.copy(pendingCheckSuccesses = results)
+                  context.become(openState(webSocket, newTx))
+              }
+
+            case _ =>
+          }
+        }
+
 
       case Reconciliate(requestName, next, session) =>
         logger.debug(s"Reconciliating websocket '$wsName'")
